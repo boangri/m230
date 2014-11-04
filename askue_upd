@@ -1,0 +1,34 @@
+#!/usr/bin/perl
+# 
+# CGI script should be placed in /var/web/cgi-bin/
+#
+$RRDTOOL = "/usr/local/rrdtool/bin/rrdtool";
+$DIR = "/var/lib/rrd/askue";
+
+print "Content-type: text/plain\n\n";
+
+read(STDIN, $buffer, $ENV{'CONTENT_LENGTH'});
+@pairs = split(/&/, $buffer);
+foreach $pair (@pairs) {
+        ($name, $value) = split(/=/, $pair);
+        if ($name =~ /([bo])([0-9])/) {
+		$let = $1;
+		$ind = $2;
+		@p = split(/;/, $value);
+		shift @p;
+		$str = "N";
+		for ($i = 0; $i < 34; $i++) {
+			$str .= $p[$i] eq "null" ? ":U": ":$p[$i]";
+		}		
+		`$RRDTOOL update $DIR/m230-$name.rrd $str`;
+		open (OUT, ">/tmp/out");
+		print OUT "$RRDTOOL update $DIR/m230-$name.rrd $str\n";
+		$str = "N";
+		for (; $i < 36; $i++) {
+			$str .= $p[$i] eq "null" ? ":U": ":$p[$i]";
+		}		
+		`$RRDTOOL update $DIR/errors-$name.rrd $str`;
+	}		
+}
+print "success\n";
+

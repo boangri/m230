@@ -1,0 +1,66 @@
+#!/bin/sh
+#
+# $Id$
+#
+ID=$1
+RRDTOOL=/usr/bin/rrdtool
+DIR=/var/lib/rrd/askue
+
+STATFILE=$DIR/m230-$ID.rrd
+
+if [ ! -d $DIR ] ; then
+  mkdir -p $DIR
+  echo "Creating $DIR"
+fi
+
+if [ -r $STATFILE ] ; then
+  echo "File $STATFILE already exists!"
+else
+#addr;mv1;mv2;mv3;mc1;mc2;mc3;mf;ma1;ma2;ma3;mps;mp1;mp2;mp3;mqs;mq1;mq2;mq3;mss;ms1;ms2;ms3;mks;mk1;mk2;mk3;se1ai;se1ae;se1ri;se1re;se2ai;se2ae;se2ri;se2re
+#31;0;0;220.82;0;0;0.064;49.99;null;null;null;7.62;0;0;7.62;0.79;0;0;0.79;14.94;0;0;14.94;0.51;0;0;0.51;12.3;null;4.017;null;0.741;null;0.365;null
+
+  $RRDTOOL create "$STATFILE" --start -1d \
+                    DS:mv1:GAUGE:600:0:400 \
+                    DS:mv2:GAUGE:600:0:400 \
+                    DS:mv3:GAUGE:600:0:400 \
+                    DS:mc1:GAUGE:600:0:1000000 \
+                    DS:mc2:GAUGE:600:0:1000000 \
+                    DS:mc3:GAUGE:600:0:1000000 \
+                    DS:mf:GAUGE:600:0:60 \
+                    DS:ma1:GAUGE:600:0:360 \
+                    DS:ma2:GAUGE:600:0:360 \
+                    DS:ma3:GAUGE:600:0:360 \
+                    DS:mps:GAUGE:600:0:1000000 \
+                    DS:mp1:GAUGE:600:0:1000000 \
+                    DS:mp2:GAUGE:600:0:1000000 \
+                    DS:mp3:GAUGE:600:0:1000000 \
+                    DS:mqs:GAUGE:600:0:1000000 \
+                    DS:mq1:GAUGE:600:0:1000000 \
+                    DS:mq2:GAUGE:600:0:1000000 \
+                    DS:mq3:GAUGE:600:0:1000000 \
+                    DS:mss:GAUGE:600:0:1000000 \
+                    DS:ms1:GAUGE:600:0:1000000 \
+                    DS:ms2:GAUGE:600:0:1000000 \
+                    DS:ms3:GAUGE:600:0:1000000 \
+                    DS:mks:GAUGE:600:0:1000000 \
+                    DS:mk1:GAUGE:600:0:1000000 \
+                    DS:mk2:GAUGE:600:0:1000000 \
+                    DS:mk3:GAUGE:600:0:1000000 \
+                    DS:se1ai:COUNTER:600:0:1000000 \
+                    DS:se1ae:COUNTER:600:0:1000000 \
+                    DS:se1ri:COUNTER:600:0:1000000 \
+                    DS:se1re:COUNTER:600:0:1000000 \
+                    DS:se2ai:COUNTER:600:0:1000000 \
+                    DS:se2ae:COUNTER:600:0:1000000 \
+                    DS:se2ri:COUNTER:600:0:1000000 \
+                    DS:se2re:COUNTER:600:0:1000000 \
+                    RRA:AVERAGE:0.999:1:600 \
+                    RRA:AVERAGE:0.999:6:700 \
+                    RRA:AVERAGE:0.999:24:775 \
+                    RRA:AVERAGE:0.999:288:797 
+  if [ $? -eq 0 ] ; then
+    echo "File $STATFILE created"
+  else 
+    echo "File $STATFILE NOT created!"
+  fi
+fi

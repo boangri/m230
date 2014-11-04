@@ -1,0 +1,408 @@
+#!/usr/bin/perl -w
+use strict;
+$| = 1;
+
+#       Redistribution and use in source and binary forms, with or without
+#       modification, are permitted provided that the following conditions are
+#       met:
+#       
+#       * Redistributions of source code must retain the above copyright
+#         notice, this list of conditions and the following disclaimer.
+#       * Redistributions in binary form must reproduce the above
+#         copyright notice, this list of conditions and the following disclaimer
+#         in the documentation and/or other materials provided with the
+#         distribution.
+#       * Neither the name of the  nor the names of its
+#         contributors may be used to endorse or promote products derived from
+#         this software without specific prior written permission.
+#       
+#       THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+#       "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+#       LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+#       A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+#       OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#       SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+#       LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+#       DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+#       THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+#       (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+#       OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#	Copyright (C) 2008,2009 Aleksandr Deviatkin aka alid
+
+
+#
+# Получаем текущие данные из счетчика Меркурий-230
+# 2008-03-01 alid
+#
+
+use IO::File;
+use Device::SerialPort;
+use Digest::CRC;
+
+my $secs = time();
+my (@args, %opts);
+foreach(@ARGV){
+   if(/^\-(\S)(.*)/){	$opts{$1} = $2;	} else {	push @args, $_;	}
+}
+my $verb = exists $opts{v};
+my $retries = (exists $opts{r}) ? $opts{r} : 2;
+my $showhead = exists $opts{s};	# Показать формат выходных данных
+my ($saddr, $passwd, $device, $ktrans) = (@args);
+die "Usage: $0 addr password serial-dev"	unless(defined $saddr && $passwd && $device);
+
+my $ctx = Digest::CRC->new(width=>16, init=>0xffff, xorout=>0x0000,
+                          poly=>0x8005, refin=>1, refout=>1, cont=>0);     
+my %types = (
+	addr => 'Device netaddr',
+	se1	=>	'Stored energy T1',
+	se2	=>	'Stored energy T2',
+#	se3	=>	'Stored energy T3',
+#	se4	=>	'Stored energy T4',
+#	seS	=>	'Stored energy Sum',
+#	seL	=>	'Stored energy Leak',
+	mv	=>	'Voltage',
+	mc	=>	'Currents',	
+	ma	=>	'Phase angls',
+	mf	=>	'Frequency',
+	mp	=>	'Power P',	# мощность P (?)
+	mq	=>	'Power Q',	# мощность Q
+	ms	=>	'Power S',	# мощность S
+	mk	=>	'K-power',	# коэффициент мощности
+);
+
+my $addr = sprintf("%x",$saddr);
+$passwd=sprintf("%x %x %x %x %x %x", split("",$passwd,6));
+print "Addr: [$addr] Pw: [$passwd]\n"	if $verb;
+my $to_errors = 0;
+my $crc_errors = 0;
+my $level=1;
+my $STALL_DEFAULT=2; # how many seconds to wait for new input
+my $MAXLENGTH = 255;	# наибольшая длина пакета
+
+my $port=Device::SerialPort->new("$device");
+my ($status,$cnt,@data);
+
+if($verb) {
+	print "Connection testing ... "	if $verb;
+	$status = tst($device,$port,$addr);
+	print "$status\n"	if $verb;
+	die	"[$addr] Connection failed: [$status]"	unless($status=~/ok/);
+}
+
+print "Session opening (level $level) ... "	if $verb;
+$status = sopen($device,$port,$addr,$level,$passwd);
+print "$status\n"	if $verb;
+die	"[$addr] Session failed: [$status]"	unless($status=~/ok/);
+
+my $ts;	# команда
+my $Data;
+
+#
+# Накопленная энергия
+#
+print "Stored energy ########################\n"	if $verb;
+my %ts = (
+	se1 => '05 00 01',
+	se2 => '05 00 02',
+	se3 => '05 00 03',
+	se4 => '05 00 04',
+	seS => '05 00 00',
+	seL => '05 00 05',
+);
+foreach my $type (keys %ts) {
+	if(exists $types{$type}) {
+		$ts = $ts{$type};
+		($status,$cnt,@data) = get($device,$addr,$ts);
+		if ($status=~/ok/) {
+			print "[$status][$cnt][".join(' ',@data)."]\n" if $verb;
+			@{$Data->{$type}} = decimal4(@data);
+			print $types{$type}." [$type]: ".
+				join(' ',@{$Data->{$type}})."\n" if $verb;
+		}
+	}
+}
+
+#
+# Текущие параметры
+#
+print "Monitoring ########################\n"	if $verb;
+%ts = (
+	mv => '08 16 11',	# напряжения
+	mc => '08 16 21',	# токи
+	ma => '08 16 51',	# углы между фазами
+);
+# три числа по три байта
+foreach my $type (keys %ts) {
+	if(exists $types{$type}) {
+		$ts = $ts{$type};
+		($status,$cnt,@data) = get($device,$addr,$ts);
+		if ($status=~/ok/) {
+			print "[$status][$cnt][".join(' ',@data)."]\n"if $verb;
+			@{$Data->{$type}} = decimal3(@data);
+			print $types{$type}." [$type]: ".
+				join(' ',@{$Data->{$type}})."\n" if $verb;
+		}
+	}
+}
+map {$_ = $_/10} @{$Data->{mc}};	# ток
+
+%ts = (
+	mp => '08 16 00',	# мощность P (?)
+	mq => '08 16 04',	# мощность Q
+	ms => '08 16 08',	# мощность S
+	mk => '08 16 30',	# коэффициент мощности
+);
+# четыре числа по три байта
+foreach my $type (keys %ts) {
+	if(exists $types{$type}) {
+		$ts = $ts{$type};
+		($status,$cnt,@data) = get($device,$addr,$ts);
+		if ($status=~/ok/) {
+			print "[$status][$cnt][".join(' ',@data)."]\n" if $verb;
+			@{$Data->{$type}} = decimal43(@data);
+			print $types{$type}." [$type]: ".
+				join(' ',@{$Data->{$type}})."\n" if $verb;
+		}
+	}
+}
+map {$_ = $_/10} @{$Data->{mk}};	# коэффициент мощности
+
+%ts = (
+	mf => '08 16 40',	# частота
+);
+# одно число три байта
+foreach my $type (keys %ts) {
+	if(exists $types{$type}) {
+		$ts = $ts{$type};
+		($status,$cnt,@data) = get($device,$addr,$ts);
+		if ($status=~/ok/) {
+			print "[$status][$cnt][".join(' ',@data)."]\n" if $verb;
+			@{$Data->{$type}} = decimal1(@data);
+			print $types{$type}." [$type]: ".
+				join(' ',@{$Data->{$type}})."\n" if $verb;
+		}
+	}
+}
+
+########################################################
+print "Session closing ... "	if $verb;
+$status = sclose($device,$port,$addr);
+print "$status\n"	if $verb;
+
+
+###### data preprocessing
+if($ktrans) {
+	map {$_*=$ktrans} @{$Data->{mc}};
+	map {$_*=$ktrans} @{$Data->{mp}};
+	map {$_*=$ktrans} @{$Data->{mq}};
+	map {$_*=$ktrans} @{$Data->{ms}};
+}
+
+###### data output
+#use Data::Dumper;
+#print Dumper $Data;
+
+print "addr;mv1;mv2;mv3;mc1;mc2;mc3;mf;ma1;ma2;ma3;mps;mp1;mp2;mp3;mqs;mq1;mq2;mq3;mss;ms1;ms2;ms3;mks;mk1;mk2;mk3;se1ai;se1ae;se1ri;se1re;se2ai;se2ae;se2ri;se2re;errs;secs\n"	if($showhead);
+$secs = time() - $secs;
+print "$saddr;".join(";",@{$Data->{mv}}).";". 
+	join(";",@{$Data->{mc}}).";". 
+	$Data->{mf}[0].";". 
+	join(";",@{$Data->{ma}}).";".
+	join(";",@{$Data->{mp}}).";".		# Мощность P
+	join(";",@{$Data->{mq}}).";".		# Мощность Q
+	join(";",@{$Data->{ms}}).";".		# Мощность S
+	join(";",@{$Data->{mk}}).";".		# коэффициент мощности
+	join(";",@{$Data->{se1}}).";".
+	join(";",@{$Data->{se2}}).
+	";$to_errors;$crc_errors;$secs".
+	"\n";
+
+
+###################### subs
+# проверка связи
+sub tst {
+	my ($device,$port,$addr) = @_;
+	my $cmd = 0;
+	my $i = $retries;
+	my $res;
+	do {
+		_send($device,$addr,$cmd);
+		$res = isok($device,$port,$addr);
+		return $res	if($res =~ /ok/);
+		$i--;
+		$to_errors++;
+	} while($i);
+	return $res;
+}
+
+# Открытие сессии
+sub sopen {
+	my ($device,$port,$addr,$level,$pass) = @_;
+	my $cmd = 1;
+	my $i = $retries;
+	my $res;
+	do {
+		_send($device,$addr,$cmd,$level,$pass);
+		$res = isok($device,$port,$addr);
+		return $res	if($res =~ /ok/);
+		$i--;
+		$to_errors++;
+	} while($i);
+	return $res;
+}
+
+# Закрытие сессии
+sub sclose {
+	my ($device,$port,$addr) = @_;
+	my $cmd = 2;
+	my $i = $retries;
+	my $res;
+	do {
+		_send($device,$addr,$cmd);
+		$res = isok($device,$port,$addr);
+		return $res	if($res =~ /ok/);
+		$i--;
+		$to_errors++;
+	} while($i);
+	return $res;
+}
+
+##########################################################################
+sub isok {
+	my ($device,$port,$addr) = @_;
+	my ($status,$cnt,@data) = _recv($port);
+	if($status =~ /ok/) {
+		unless(hex($cnt)==4 && hex($data[0])==hex($addr) && hex($data[1])==0) {
+			$status = 'fail';
+#		} else {
+#			# проверить crc
+#			$status = iscrc(@data);
+		}
+	}
+	return $status;
+}
+
+# проверка crc
+sub iscrc {
+	my (@data) = @_;
+	my $hstr = "";
+	for my $i (@data) { $hstr .= sprintf "%02x", hex($i); } 
+        my $data = pack ("H*", $hstr);                      
+	$ctx->reset;
+        $ctx->add($data);                                         
+        my $crc16 = $ctx->digest;                       
+	$crc_errors++ if $crc16;
+	return $crc16 ? 'crc-error' : 'ok';
+}
+
+sub _send {                                                      
+        my ($device,$addr, @str) = @_;                                            
+	my $hstr = "$addr ".join(' ',@str);
+	my @a = split / /, $hstr;
+	$hstr = "";
+	for my $i (@a) { $hstr .= sprintf "%02x", hex($i); } 
+        my $data = pack ("H*", $hstr);                      
+	$ctx->reset;
+        $ctx->add($data);                                         
+        my $crc16 = $ctx->digest;                       
+        $data .= chr($crc16 & 0xff);                                       
+        $data .= chr(($crc16 >> 8) & 0xff);                              
+        $port->write($data);                                                 
+}                    
+
+sub _recv {
+	my ($port) = @_;
+	my $timeout=$STALL_DEFAULT * 10;
+	$port->read_char_time(0);     # don't wait for each character
+	$port->read_const_time(200); # 0,15 second per unfulfilled "read" call
+	my $status='ok';
+	my $chars=0;
+	my @data;
+	my $buffer="";
+	my ($count,$saw);
+	while ($timeout>0) {
+		($count,$saw)=$port->read($MAXLENGTH); # will read _up to_ $MAXLENGTH chars
+		if ($count > 0) {
+			$chars+=$count;
+			$buffer.=$saw;
+			@data = map {/(..)/gm} unpack("H*",$buffer);
+			last;
+		}
+		else {
+			$timeout--;
+		}
+	}
+	if ($timeout==0) {
+		$status = 0;	# Waited $STALL_DEFAULT seconds and never saw what I wanted
+	}
+	$status = iscrc(@data)	if(@data);
+	return($status,$count,@data);
+}
+
+sub get {
+	my ($device,$addr,$ts) = @_;
+	my $i = $retries;
+	do {
+		_send($device,$addr,$ts);
+		($status,$cnt,@data) = _recv($port);
+		$i--;
+		if($status =~ /ok/) {
+			$i = 0;
+		} else {
+			$to_errors++;
+		}
+	} while($i);
+	return($status,$cnt,@data);
+}
+
+#############################################################################
+# data unpacking
+#
+sub decimal4 {	# 4 четырехбайтовых числа в строке
+	my (@data) = @_;
+	# контрольная сумма и байт адреса
+	pop @data; pop @data; shift @data;
+	my @a;
+	foreach my $i (0,4,8,12) {
+		my $num = hex(join("",$data[1+$i],$data[0+$i],$data[3+$i],$data[2+$i]));
+		push @a, (($num == 4294967295)?'null':$num/1000);
+	}
+	return @a;
+}
+
+sub decimal3 {	# 3 трехбайтных числа в строке
+	my (@data) = @_;
+	# контрольная сумма и байт адреса
+	pop @data; pop @data; shift @data;
+	my @a;
+	foreach my $i (0,3,6) {
+		my $num = hex(join("",sprintf("%02X",(hex($data[0+$i]) & hex("3F"))),$data[2+$i],$data[1+$i]));
+		push @a, (($num == 4194303)?'null':$num/100);
+	}
+	return @a;
+}
+
+sub decimal1 {	# 1 трехбайтное число в строке
+	my (@data) = @_;
+	# контрольная сумма и байт адреса
+	pop @data; pop @data; shift @data;
+	my @a;
+	foreach my $i (0) {
+		my $num = hex(join("",sprintf("%02X",(hex($data[0+$i]) & hex("3F"))),$data[2+$i],$data[1+$i]));
+		push @a, (($num == 4194303)?'null':$num/100);
+	}
+	return @a;
+}
+
+sub decimal43 {	# 4 трехбайтных числа в строке
+	my (@data) = @_;
+	# контрольная сумма и байт адреса
+	pop @data; pop @data; shift @data;
+	my @a;
+	foreach my $i (0,3,6,9) {
+		my $num = hex(join("",sprintf("%02X",(hex($data[0+$i]) & hex("3F"))),$data[2+$i],$data[1+$i]));
+		push @a, (($num == 4194303)?'null':$num/100);
+	}
+	return @a;
+}
